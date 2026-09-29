@@ -1,42 +1,55 @@
-"""CPU inference and held-out accuracy measurements."""
+"""Measure accuracy, model storage, and warm CPU inference latency."""
 
-import statistics
-import time
+from collections import Counter
+from statistics import median
+from time import perf_counter_ns
 
 import torch
 
 
-def count_parameters(model):
+def count_parameters(model) -> int:
     return sum(parameter.numel() for parameter in model.parameters())
 
 
-def measure_model_size_kb(model):
-    """Float32 parameter storage in KiB; excludes Python and runtime overhead."""
+def measure_model_size_kib(model) -> float:
+    """Parameter storage only; excludes Python, tokenizers, and runtime overhead."""
     return sum(p.numel() * p.element_size() for p in model.parameters()) / 1024
 
 
-def measure_latency(model, passes=1000):
-    """Single-query CPU forward latency after warm-up, in milliseconds."""
-    model = model.cpu().eval()
-    query = torch.randn(1, 384)
-    with torch.inference_mode():
-        for _ in range(100):
-            model(query)
-        samples = []
-        for _ in range(passes):
-            start = time.perf_counter_ns()
-            model(query)
-            samples.append((time.perf_counter_ns() - start) / 1e6)
-    samples.sort()
-    return statistics.median(samples), samples[int(0.95 * (passes - 1))]
+def measure_latency(call, warmups: int = 10, passes: int = 100) -> tuple[float, float]:
+    """Return p50/p95 milliseconds for a warmed, single-request CPU call."""
+    if passes < 1:
+        raise ValueError("passes must be positive")
+    for _ in range(warmups):
+        call()
+    times = []
+    for _ in range(passes):
+        start = perf_counter_ns()
+        call()
+        times.append((perf_counter_ns() - start) / 1_000_000)
+    times.sort()
+    return median(times), times[int(0.95 * (passes - 1))]
 
 
-def evaluate_accuracy(model, loader, device="cpu"):
+def predict(model, embeddings) -> list[int]:
     model.eval()
-    correct = total = 0
     with torch.inference_mode():
-        for embeddings, labels in loader:
-            predictions = model(embeddings.to(device)).argmax(dim=1)
-            correct += (predictions == labels.to(device)).sum().item()
-            total += len(labels)
-    return correct / total
+        return model(embeddings).argmax(dim=1).tolist()
+
+
+def accuracy(predictions: list[int], answers: list[int]) -> float:
+    if not answers or len(predictions) != len(answers):
+        raise ValueError("predictions and answers must have the same nonzero length")
+    return sum(guess == answer for guess, answer in zip(predictions, answers)) / len(answers)
+
+
+def per_intent_recall(predictions: list[int], answers: list[int], names: list[str]):
+    """Return (correct, total) for every source intent, including rare ones."""
+    total = Counter(answers)
+    correct = Counter(answer for guess, answer in zip(predictions, answers) if guess == answer)
+    return {name: (correct[index], total[index]) for index, name in enumerate(names)}
+
+
+def common_confusions(predictions: list[int], answers: list[int], names: list[str], limit=5):
+    counts = Counter((names[answer], names[guess]) for guess, answer in zip(predictions, answers) if guess != answer)
+    return [(correct, guessed, count) for (correct, guessed), count in counts.most_common(limit)]

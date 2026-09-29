@@ -1,1 +1,1 @@
-"""Small query routing distillation experiment."""
+"""Bitext customer-support intent distillation experiment."""
