@@ -1,4 +1,17 @@
+.gitignore
+.agents
 .venv/
 __pycache__/
 .ipynb_checkpoints/
 *.pyc
+.DS_Store
+.pytest_cache/
+
+# Local study notes and drafts. The reviewed experiment notebook is the exception.
+tasks/
+notebooks/*
+!notebooks/intent_experiment.ipynb
+micro-distill.ipynb
+models.py
+data
+artifacts/
